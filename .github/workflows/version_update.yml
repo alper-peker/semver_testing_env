@@ -1,0 +1,251 @@
+name: Component-aware SemVer Workflow
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+concurrency:
+  group: semver-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare_meta:
+    name: Detect changed components & SemVer bump
+    runs-on: ubuntu-latest
+    if: >
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.base.ref == 'main'
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+      bump: ${{ steps.bump.outputs.bump }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed components
+        id: detect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.merge_commit_sha || github.event.pull_request.head.sha }}"
+
+          echo "Base: ${BASE_SHA}"
+          echo "Head: ${HEAD_SHA}"
+
+          git diff --name-only "${BASE_SHA}" "${HEAD_SHA}" > changed.txt || true
+          cat changed.txt || true
+
+          # Klasör isimleri (senin yapına uygun)
+          FRONT=$(grep -E '^frontend-code/'  changed.txt || true)
+          BACK=$(grep -E '^flask-api/'     changed.txt || true)
+          FUNCS=$(grep -E '^gcp-functions/' changed.txt || true)
+          INFRA=$(grep -E '^(nginx/|docker-compose|infra/)' changed.txt || true)
+
+          OUT=""
+
+          [[ -n "${FRONT:-}"  ]] && OUT+="${OUT:+,}fend"
+          [[ -n "${BACK:-}"   ]] && OUT+="${OUT:+,}bend"
+          [[ -n "${FUNCS:-}"  ]] && OUT+="${OUT:+,}func"
+          [[ -n "${INFRA:-}"  ]] && OUT+="${OUT:+,}infra"
+
+          echo "changed=${OUT}" >> "$GITHUB_OUTPUT"
+          echo "Detected changed component(s): ${OUT:-none}"
+
+      - name: Determine SemVer bump from labels
+        id: bump
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = (context.payload.pull_request.labels || []).map(l => l.name);
+            core.info(`PR labels: ${labels.join(', ') || '(none)'}`);
+
+            let bump = 'patch';
+
+            if (labels.includes('breaking-change')) {
+              bump = 'major';
+            } else if (labels.includes('feature')) {
+              bump = 'minor';
+            }
+
+            core.info(`Selected bump level: ${bump}`);
+            core.setOutput('bump', bump);
+
+  compute_versions:
+    name: Compute next version per component
+    runs-on: ubuntu-latest
+    needs: prepare_meta
+    if: needs.prepare_meta.outputs.changed != ''
+    outputs:
+      frontend_next: ${{ steps.calc.outputs.frontend_next }}
+      backend_next: ${{ steps.calc.outputs.backend_next }}
+      functions_next: ${{ steps.calc.outputs.functions_next }}
+      infra_next: ${{ steps.calc.outputs.infra_next }}
+      global_next: ${{ steps.calc.outputs.global_next }}
+    env:
+      BUMP_LEVEL: ${{ needs.prepare_meta.outputs.bump }}
+      CHANGED: ${{ needs.prepare_meta.outputs.changed }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch tags
+        run: |
+          git fetch --tags --force
+
+      - name: Compute next versions
+        id: calc
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BUMP="${BUMP_LEVEL}"
+          CHANGED="${CHANGED}"
+
+          echo "Bump level: ${BUMP}"
+          echo "Changed components: ${CHANGED}"
+
+          # Componentler için versiyon hesaplayıcı
+          bump_one() {
+            local prefix="$1"
+            local pattern="${prefix}-v*"
+
+            local last
+            last=$(git tag --list "$pattern" | sort -V | tail -n 1 || true)
+
+            local base
+            if [[ -z "$last" ]]; then
+              base="0.0.0"
+            else
+              base="${last#${prefix}-v}"
+            fi
+
+            IFS='.' read -r major minor patch <<< "$base"
+
+            case "$BUMP" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch|*) patch=$((patch + 1)) ;;
+            esac
+
+            echo "${prefix}-v${major}.${minor}.${patch}"
+          }
+
+          bump_global() {
+            local last
+            last=$(git tag --list "v[0-9]*" | sort -V | tail -n 1 || true)
+
+            local base
+            if [[ -z "$last" ]]; then
+              base="0.0.0"
+            else
+              base="${last#v}"
+            fi
+
+            IFS='.' read -r major minor patch <<< "$base"
+
+            case "$BUMP" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch|*) patch=$((patch + 1)) ;;
+            esac
+
+            echo "v${major}.${minor}.${patch}"
+          }
+
+          FRONT_NEXT=""
+          BACK_NEXT=""
+          FUNCS_NEXT=""
+          INFRA_NEXT=""
+          
+          GLOBAL_NEXT="$(bump_global)"
+
+          if [[ ",$CHANGED," == *",fend,"* ]]; then
+            FRONT_NEXT="$(bump_one "frontend")"
+          fi
+
+          if [[ ",$CHANGED," == *",bend,"* ]]; then
+            BACK_NEXT="$(bump_one "backend")"
+          fi
+
+          if [[ ",$CHANGED," == *",func,"* ]]; then
+            FUNCS_NEXT="$(bump_one "functions")"
+          fi
+
+          if [[ ",$CHANGED," == *",infra,"* ]]; then
+            INFRA_NEXT="$(bump_one "infra")"
+          fi
+
+          echo "frontend_next=$FRONT_NEXT"  >> "$GITHUB_OUTPUT"
+          echo "backend_next=$BACK_NEXT"    >> "$GITHUB_OUTPUT"
+          echo "functions_next=$FUNCS_NEXT" >> "$GITHUB_OUTPUT"
+          echo "infra_next=$INFRA_NEXT"     >> "$GITHUB_OUTPUT"
+          echo "global_next=$GLOBAL_NEXT"   >> "$GITHUB_OUTPUT"
+
+          echo "Computed next versions:"
+          echo "  global   : ${GLOBAL_NEXT:-none}"
+          echo "  frontend : ${FRONT_NEXT:-none}"
+          echo "  backend  : ${BACK_NEXT:-none}"
+          echo "  functions: ${FUNCS_NEXT:-none}"
+          echo "  infra    : ${INFRA_NEXT:-none}"
+
+  create_and_push_tags:
+    name: Create and push tags
+    runs-on: ubuntu-latest
+    needs: compute_versions
+    if: >
+      needs.compute_versions.outputs.global_next != ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions@users.noreply.github.com"
+
+      - name: Create and push tags
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          F_TAG="${{ needs.compute_versions.outputs.frontend_next }}"
+          B_TAG="${{ needs.compute_versions.outputs.backend_next }}"
+          FN_TAG="${{ needs.compute_versions.outputs.functions_next }}"
+          INF_TAG="${{ needs.compute_versions.outputs.infra_next }}"
+          G_TAG="${{ needs.compute_versions.outputs.global_next }}"
+
+          echo "Tags to create:"
+          echo "  global   : ${G_TAG:-none}"
+          echo "  frontend : ${F_TAG:-none}"
+          echo "  backend  : ${B_TAG:-none}"
+          echo "  functions: ${FN_TAG:-none}"
+          echo "  infra    : ${INF_TAG:-none}"
+
+          if [[ -n "${G_TAG}" ]]; then
+            echo "Creating tag: ${G_TAG}"
+            git tag -a "${G_TAG}" -m "Global release via PR #${{ github.event.pull_request.number }}"
+          fi
+
+          if [[ -n "${F_TAG}" ]]; then
+            git tag -a "${F_TAG}" -m "Frontend release via PR #${{ github.event.pull_request.number }}"
+          fi
+
+          if [[ -n "${B_TAG}" ]]; then
+            git tag -a "${B_TAG}" -m "Backend release via PR #${{ github.event.pull_request.number }}"
+          fi
+
+          if [[ -n "${FN_TAG}" ]]; then
+            git tag -a "${FN_TAG}" -m "Functions release via PR #${{ github.event.pull_request.number }}"
+          fi
