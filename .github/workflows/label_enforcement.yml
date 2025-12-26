@@ -1,0 +1,111 @@
+name: Label Enforcement
+
+on:
+  pull_request:
+    types:
+      [
+        opened,
+        synchronize,
+        reopened,
+        edited,
+        ready_for_review,
+        labeled,
+        unlabeled,
+      ]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to check"
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+env:
+  APPROVAL_USERS: "AlperPeker, alper-peker"
+
+jobs:
+  label-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require approvals and SemVer labels
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+
+            const number =
+              context.eventName === "pull_request"
+                ? context.payload.pull_request.number
+                : context.eventName === "workflow_dispatch"
+                  ? Number(core.getInput('pr_number'))
+                  : null;
+
+            if (!number) {
+              core.setFailed("PR number not found in event payload.");
+              return;
+            }
+
+            async function getLabels() {
+              const res = await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number });
+              return res.data.map(l => l.name);
+            }
+
+            const approvers = process.env.APPROVAL_USERS.split(',').map(s => s.trim());
+
+            let labels = await getLabels();
+
+            if (!labels.includes("approved")) {
+              const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 });
+              
+              const approvedBy = new Set(
+                comments.data
+                  .filter(c => (c.body || "").trim().startsWith("/approve"))
+                  .map(c => c.user.login)
+                  .filter(u => approvers.includes(u))
+              );
+              
+              const pending = approvers.filter(u => !approvedBy.has(u));
+              core.warning(`Pending approvals: ${pending.length ? pending.join(', ') : 'none'}`);
+              
+              const recent = comments.data.slice(-10).some(c =>
+                (c.body || '').includes('Pending approvals:') &&
+                pending.every(u => (c.body || '').includes(`@${u}`))
+              );
+              
+              if (!recent && context.eventName !== "workflow_dispatch" && pending.length > 0) {
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: number,
+                  body: `Pending approvals: ${pending.map(u => `@${u}`).join(', ')}`
+                });
+              }
+
+              core.setFailed(`Your labels must be approved by: ${approvers.join(', ')} to merge into main.`);
+              return;
+            }
+
+            const semver = new Set([
+              "breaking-change",
+              "feature",
+              "fix",
+              "security",
+              "perf",
+              "refactor",
+              "docs",
+              "test",
+              "build",
+              "ci",
+              "deps",
+              "revert"
+            ]);
+            
+            const found = labels.filter(l => semver.has(l));
+
+            if (found.length < 1) {
+              core.setFailed("At least one SemVer-impact label is required: breaking-change, feature, fix, security, perf, refactor, docs, test, build, ci, deps, revert.");
+              return;
+            }
+
+            core.info(`Success! 'approved' present; SemVer labels found: ${found.join(', ')}`);
