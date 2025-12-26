@@ -11,5 +11,13 @@ def hello():
         "status": "success"
     })
 
+@app.route('/api/hello2', methods=['GET'])
+def hello2():
+    return jsonify({
+        "message": "Hello2 from Backend (minor feature)!",
+        "status": "success"
+    })
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
