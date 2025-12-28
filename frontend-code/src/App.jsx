@@ -12,7 +12,7 @@ function App() {
     setError(null)
 
     try {
-      const response = await fetch('/api/hello')
+      const response = await fetch('/api/hello2')
       const json = await response.json()
       setData(json)
       setLastUpdated(new Date())
@@ -33,7 +33,7 @@ function App() {
 
   return (
     <div style={{ textAlign: 'center', padding: '50px', fontFamily: 'Arial' }}>
-      <h1>Welcome to Test Environment of SEMVER 4 taico</h1>
+      <h1>Welcome to Test Environment of SEMVER 4 taico (FRONTEND V2)</h1>
       <div style={{ border: '2px solid #646cff', padding: '20px', borderRadius: '10px' }}>
         <h3>Backend Status:</h3>
 
