@@ -212,7 +212,6 @@ jobs:
 
             git fetch --tags --force
             
-            # Previous tag bulma mantığı
             local prev_tag=""
             local pattern
             if [[ "$component" == "global" ]]; then
