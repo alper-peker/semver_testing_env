@@ -308,6 +308,8 @@ jobs:
               NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
             fi
 
+            NOTES="${NOTES}"$'\n\n'"Global tag: ${GLOBAL_TAG}"
+
             echo "Creating GitHub Release for $tag..."
             gh release create "$tag" \
               --title "$tag" \
@@ -315,7 +317,6 @@ jobs:
               --repo "$REPO"
           }
           
-          create_release "$GLOBAL_TAG" "global"
           create_release "$FRONT_TAG" "frontend"
           create_release "$BACK_TAG" "backend"
           create_release "$FUNCS_TAG" "functions"
