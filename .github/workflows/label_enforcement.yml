@@ -106,7 +106,7 @@ jobs:
           CLEAN_SUGGESTION=$(echo "$SUGGESTION" | sed 's/[."]//g' | tr -d '\n')
           echo "suggestion=$CLEAN_SUGGESTION" >> $GITHUB_OUTPUT
 
-      - name: Apply Labels
+      - name: Apply Labels (Silent)
         uses: actions/github-script@v7
         if: success()
         with:
@@ -127,7 +127,6 @@ jobs:
             }
 
   label-check:
-    name: Enforcement Check
     runs-on: ubuntu-latest
     needs: ai_label_suggestion
     if: always()
@@ -157,7 +156,7 @@ jobs:
 
             const approvers = process.env.APPROVAL_USERS.split(',').map(s => s.trim());
             let labels = await getLabels();
-
+            
             if (!labels.includes("approved")) {
               const comments = await github.rest.issues.listComments({
                  owner, repo, issue_number: number, per_page: 100
