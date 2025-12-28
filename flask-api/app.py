@@ -7,14 +7,14 @@ CORS(app)
 @app.route('/api/hello', methods=['GET'])
 def hello():
     return jsonify({
-        "message": "Greetings from the Backend! This data was sent to you by Pyhton Flask 🐍/n Without any typos!",
+        "msg": "Greetings from the Backend! This data was sent to you by Pyhton Flask 🐍/n Without any typos!",
         "status": "success"
     })
 
 @app.route('/api/hello2', methods=['GET'])
 def hello2():
     return jsonify({
-        "message": "Hello2 from Backend (minor feature)!",
+        "msg": "Hello2 from Backend (minor feature)!",
         "status": "success"
     })
 
