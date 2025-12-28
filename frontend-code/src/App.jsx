@@ -34,18 +34,6 @@ function App() {
   return (
     <div style={{ textAlign: 'center', padding: '50px', fontFamily: 'Arial' }}>
       <h1>Welcome to Test Environment of SEMVER 4 taico</h1>
-
-      <div style={{ marginBottom: '12px' }}>
-        <button onClick={loadData} disabled={loading}>
-          {loading ? 'Refreshing...' : 'Refresh'}
-        </button>
-        {lastUpdated && (
-          <div style={{ marginTop: '8px', fontSize: '0.9em', opacity: 0.8 }}>
-            Last updated: {lastUpdated.toLocaleTimeString()}
-          </div>
-        )}
-      </div>
-
       <div style={{ border: '2px solid #646cff', padding: '20px', borderRadius: '10px' }}>
         <h3>Backend Status:</h3>
 
