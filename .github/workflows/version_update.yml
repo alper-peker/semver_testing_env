@@ -187,7 +187,7 @@ jobs:
       - name: Generate Release Notes and Create Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_LABEL }}
           FRONT_TAG: ${{ needs.compute_versions.outputs.frontend_next }}
           BACK_TAG: ${{ needs.compute_versions.outputs.backend_next }}
           FUNCS_TAG: ${{ needs.compute_versions.outputs.functions_next }}
