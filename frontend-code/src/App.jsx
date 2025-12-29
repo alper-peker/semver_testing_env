@@ -7,6 +7,7 @@ function App() {
   const [error, setError] = useState(null)
   const [lastUpdated, setLastUpdated] = useState(null)
 
+#Minor formatting patch
   const loadData = async () => {
     setLoading(true)
     setError(null)
