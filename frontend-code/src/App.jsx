@@ -13,7 +13,7 @@ function App() {
     setError(null)
 
     try {
-      const response = await fetch('/api/hello2')
+      const response = await fetch('/api/ping')
       const json = await response.json()
       setData(json)
       setLastUpdated(new Date())
