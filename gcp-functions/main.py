@@ -16,8 +16,9 @@ def hello_http(request):
 
     headers = {"X-Function": "hello_http"}
 
-    if fmt == "json":
-        payload = {"message": base, "status": "ok"}
-        return (json.dumps(payload), 200, {**headers, "Content-Type": "application/json"})
+    payload = {"message": base, "status": "ok"}
 
-    return (base, 200, headers)
+    if fmt == "text":
+        return (base, 200, {**headers, "Content-Type": "text/plain; charset=utf-8"})
+
+    return (json.dumps(payload), 200, {**headers, "Content-Type": "application/json"})
