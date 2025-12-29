@@ -19,6 +19,14 @@ def hello2():
         "status": "success"
     })
 
+@app.route('/api/ping', methods=['GET'])
+def ping():
+    return jsonify({
+        "message": "pong",
+        "status": "success"
+    })
+
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
 
