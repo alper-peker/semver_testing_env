@@ -63,7 +63,7 @@ jobs:
       - name: Analyze with OpenAI
         id: openai_analysis
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_LABEL }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
