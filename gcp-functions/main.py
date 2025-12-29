@@ -2,11 +2,8 @@ import functions_framework
 
 @functions_framework.http
 def hello_http(request):
-    """HTTP Cloud Function.
-    Args:
-        request (flask.Request): The request object.
-    Returns:
-        The response text, or any set of values that can be turned into a
-        Response object using `make_response`.
-    """
-    return 'This request is from the GCP function simulation. Real ones coming soon! ⚡', 200
+    if request.method not in ("GET", "POST"):
+        return ("Method Not Allowed", 405, {"Allow": "GET, POST"})
+
+    body = "This request is from the GCP function simulation. Real ones coming soon! ⚡"
+    return (body, 200, {"X-Function": "hello_http"})
