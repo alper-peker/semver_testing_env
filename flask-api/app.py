@@ -11,6 +11,7 @@ def hello():
         "status": "success"
     })
 
+#Minor formatting patch
 @app.route('/api/hello2', methods=['GET'])
 def hello2():
     return jsonify({
