@@ -33,7 +33,7 @@ services:
     image: nginx:alpine
     container_name: demo-nginx
     ports:
-      - "8080:80"
+      - "9090:80"
     depends_on:
       - frontend
       - backend

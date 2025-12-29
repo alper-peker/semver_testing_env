@@ -15,7 +15,7 @@ def hello():
 @app.route('/api/hello2', methods=['GET'])
 def hello2():
     return jsonify({
-        "msg": "Hello2 from Backend (minor feature)!",
+        "messagev2": "Hello2 from Backend (minor feature)!",
         "status": "success"
     })
 
