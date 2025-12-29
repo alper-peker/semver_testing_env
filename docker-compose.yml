@@ -17,6 +17,11 @@ services:
       - "5000:5000"
     volumes:
       - ./flask-api:/app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:5000/api/hello').read()\" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   cloud-function:
     build: ./gcp-functions
