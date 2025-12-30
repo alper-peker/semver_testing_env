@@ -32,6 +32,7 @@ function App() {
 
   const messageText = data?.message ?? data?.msg
 
+  #Comment
   return (
     <div style={{ textAlign: 'center', padding: '50px', fontFamily: 'Arial' }}>
       <h1>Welcome to Test Environment of SEMVER 4 taico (FRONTEND V2)</h1>
