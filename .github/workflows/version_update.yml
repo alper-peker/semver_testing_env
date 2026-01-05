@@ -101,11 +101,23 @@ jobs:
             [[ -n "$last" ]] && base="${last#${prefix}-v}"
             
             IFS='.' read -r major minor patch <<< "$base"
+            
             case "$BUMP" in
               major) major=$((major + 1)); minor=0; patch=0 ;;
               minor) minor=$((minor + 1)); patch=0 ;;
               patch|*) patch=$((patch + 1)) ;;
             esac
+
+            if [[ "$patch" -ge 10 ]]; then
+              patch=0
+              minor=$((minor + 1))
+            fi
+            
+            if [[ "$minor" -ge 10 ]]; then
+              minor=0
+              major=$((major + 1))
+            fi
+
             echo "${prefix}-v${major}.${minor}.${patch}"
           }
 
@@ -116,11 +128,23 @@ jobs:
             [[ -n "$last" ]] && base="${last#v}"
 
             IFS='.' read -r major minor patch <<< "$base"
+            
             case "$BUMP" in
               major) major=$((major + 1)); minor=0; patch=0 ;;
               minor) minor=$((minor + 1)); patch=0 ;;
               patch|*) patch=$((patch + 1)) ;;
             esac
+
+            if [[ "$patch" -ge 10 ]]; then
+              patch=0
+              minor=$((minor + 1))
+            fi
+            
+            if [[ "$minor" -ge 10 ]]; then
+              minor=0
+              major=$((major + 1))
+            fi
+
             echo "v${major}.${minor}.${patch}"
           }
 
@@ -212,7 +236,6 @@ jobs:
 
             git fetch --tags --force
             
-            # Previous tag bulma mantığı
             local prev_tag=""
             local pattern
             if [[ "$component" == "global" ]]; then
@@ -245,7 +268,7 @@ jobs:
                 "frontend") path_filter="frontend-code/" ;;
                 "backend") path_filter="flask-api/" ;;
                 "functions") path_filter="gcp-functions/" ;;
-                "infra") path_filter="." ;; # Infra dağınık olduğu için kök dizini baz alabiliriz
+                "infra") path_filter="." ;; 
                 "global") path_filter="." ;;
                 *) path_filter="." ;;
               esac
