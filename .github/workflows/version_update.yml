@@ -106,6 +106,16 @@ jobs:
               minor) minor=$((minor + 1)); patch=0 ;;
               patch|*) patch=$((patch + 1)) ;;
             esac
+
+            if [[ "$patch" -ge 10 ]]; then
+              patch=0
+              minor=$((minor + 1))
+            fi
+            if [[ "$minor" -ge 10 ]]; then
+              minor=0
+              major=$((major + 1))
+            fi
+
             echo "${prefix}-v${major}.${minor}.${patch}"
           }
 
@@ -121,6 +131,16 @@ jobs:
               minor) minor=$((minor + 1)); patch=0 ;;
               patch|*) patch=$((patch + 1)) ;;
             esac
+
+            if [[ "$patch" -ge 10 ]]; then
+              patch=0
+              minor=$((minor + 1))
+            fi
+            if [[ "$minor" -ge 10 ]]; then
+              minor=0
+              major=$((major + 1))
+            fi
+
             echo "v${major}.${minor}.${patch}"
           }
 
@@ -172,7 +192,7 @@ jobs:
           git push --tags
 
   major_release:
-    name: Create Major Release
+    name: Create Major Global Release
     runs-on: ubuntu-latest
     needs: [prepare_meta, compute_versions, create_and_push_tags]
     if: needs.prepare_meta.outputs.bump == 'major'
@@ -184,7 +204,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Generate Release Notes and Create Release
+      - name: Generate Release Notes and Create Global Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY_LABEL }}
@@ -199,125 +219,100 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           set -euo pipefail
-
-          create_release() {
-            local tag="$1"
-            local component="$2"
-
-            if [[ -z "$tag" ]]; then
-              return
-            fi
-
-            echo "Processing release for $component ($tag)..."
-
-            git fetch --tags --force
-            
-            # Previous tag bulma mantığı
-            local prev_tag=""
-            local pattern
-            if [[ "$component" == "global" ]]; then
-               pattern="^v[0-9]"
-            else
-               pattern="^${component}-v"
-            fi
-            
-            local release_tags
-            release_tags=$(gh release list --limit 100 --json tagName --jq ".[].tagName" | grep "$pattern" || true)
-            
-            for t in $release_tags; do
-              if [[ "$t" != "$tag" ]]; then
-                prev_tag="$t"
-                break
-              fi
-            done
-
-            local diff_output=""
-            
-            if [[ -n "$prev_tag" ]]; then
-              echo "Creating diff from previous release: $prev_tag"
-              diff_output=$(git diff "$prev_tag" "$tag" | head -c 3000 || true)
-            else
-              # WARNING: COLLECTING FULL COMMIT HISTORY
-              echo "No previous release found. Collecting full commit history for initial release."
-              
-              local path_filter=""
-              case "$component" in
-                "frontend") path_filter="frontend-code/" ;;
-                "backend") path_filter="flask-api/" ;;
-                "functions") path_filter="gcp-functions/" ;;
-                "infra") path_filter="." ;; # Infra dağınık olduğu için kök dizini baz alabiliriz
-                "global") path_filter="." ;;
-                *) path_filter="." ;;
-              esac
-              
-              local history
-              history=$(git log --pretty=format:"- %s" "$tag" -- "$path_filter" | head -n 50 || true)
-              
-              diff_output="INITIAL RELEASE. Full Commit History:\n$history"
-            fi
-
-            PROMPT="You are a technical writer. Generate a release note for a major version release of the '$component' component.
-            
-            Context:
-            - Component: $component
-            - Version: $tag
-            - Previous Version: ${prev_tag:-Initial Release}
-            - PR Title: $PR_TITLE
-            - PR Body: $PR_BODY
-            
-            Data for Summary (Code Diff OR Commit History):
-            $diff_output
-            
-            Instructions:
-            Generate the release notes using EXACTLY the following format:
-            
-            Title: Release $tag
-            Summary: Brief explanation of this release (mention if it is the first release).
-            
-            [Only if breaking changes exist]
-            ⚠️ Breaking Changes:
-            - Detail them here.
-            
-            Changes:
-            - List features/fixes based on the provided data.
-            
-            Do not include raw diffs or commit hashes. Ensure the tone is professional."
-
-            PAYLOAD=$(jq -n \
-              --arg model "gpt-4o-mini" \
-              --arg system "You are a helpful assistant that generates release notes." \
-              --arg user "$PROMPT" \
-              '{
-                model: $model,
-                messages: [
-                  {role: "system", content: $system},
-                  {role: "user", content: $user}
-                ],
-                temperature: 0.3
-              }')
-
-            RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $OPENAI_API_KEY" \
-              -d "$PAYLOAD")
-
-            if echo "$RESPONSE" | jq -e '.error' > /dev/null; then
-              echo "OpenAI API Error: $(echo $RESPONSE | jq -r '.error.message')"
-              NOTES="Major release for $component. See PR #$PR_NUMBER for details."
-            else
-              NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
-            fi
-
-            NOTES="${NOTES}"$'\n\n'"Global tag: ${GLOBAL_TAG}"
-
-            echo "Creating GitHub Release for $tag..."
-            gh release create "$tag" \
-              --title "$tag" \
-              --notes "$NOTES" \
-              --repo "$REPO"
-          }
           
-          create_release "$FRONT_TAG" "frontend"
-          create_release "$BACK_TAG" "backend"
-          create_release "$FUNCS_TAG" "functions"
-          create_release "$INFRA_TAG" "infra"
+          TAG="$GLOBAL_TAG"
+
+          if [[ -z "$TAG" ]]; then
+            echo "No global tag found, skipping release."
+            exit 0
+          fi
+
+          echo "Processing GLOBAL release for $TAG..."
+
+          git fetch --tags --force
+          
+          # Find previous global tag
+          PREV_TAG=""
+          RELEASE_TAGS=$(gh release list --limit 100 --json tagName --jq ".[].tagName" | grep "^v[0-9]" || true)
+          
+          for t in $RELEASE_TAGS; do
+            if [[ "$t" != "$TAG" ]]; then
+              PREV_TAG="$t"
+              break
+            fi
+          done
+
+          DIFF_OUTPUT=""
+          
+          if [[ -n "$PREV_TAG" ]]; then
+            echo "Creating diff from previous release: $PREV_TAG"
+            DIFF_OUTPUT=$(git diff "$PREV_TAG" "$TAG" | head -c 4000 || true)
+          else
+            echo "No previous global release found. Collecting full commit history."
+            HISTORY=$(git log --pretty=format:"- %s" "$TAG" | head -n 50 || true)
+            DIFF_OUTPUT="INITIAL GLOBAL RELEASE. Full Commit History:\n$HISTORY"
+          fi
+
+          PROMPT="You are a technical writer. Generate a release note for a major GLOBAL release of the repository.
+          
+          Context:
+          - Release Version: $TAG
+          - Previous Version: ${PREV_TAG:-Initial Release}
+          - PR Title: $PR_TITLE
+          - PR Body: $PR_BODY
+          
+          Data for Summary (Global Diff OR Commit History):
+          $DIFF_OUTPUT
+          
+          Instructions:
+          Generate the release notes using EXACTLY the following format:
+          
+          Summary: Brief explanation of this release (mention if it is the first release).
+          
+          ⚠️ Breaking Changes:
+          - Detail the major breaking changes here based on the diff/PR.
+          
+          Changes:
+          - List key features/fixes based on the provided data.
+          
+          Do not include raw diffs or commit hashes. Ensure the tone is professional."
+
+          PAYLOAD=$(jq -n \
+            --arg model "gpt-4o-mini" \
+            --arg system "You are a helpful assistant that generates release notes." \
+            --arg user "$PROMPT" \
+            '{
+              model: $model,
+              messages: [
+                {role: "system", content: $system},
+                {role: "user", content: $user}
+              ],
+              temperature: 0.3
+            }')
+
+          RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d "$PAYLOAD")
+
+          if echo "$RESPONSE" | jq -e '.error' > /dev/null; then
+            echo "OpenAI API Error: $(echo $RESPONSE | jq -r '.error.message')"
+            NOTES="Major release $TAG. See PR #$PR_NUMBER for details."
+          else
+            NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
+          fi
+
+          COMPONENT_INFO=""
+          COMPONENT_INFO+=$'\n\n### 📦 Component Versions\n'
+          [[ -n "$FRONT_TAG" ]] && COMPONENT_INFO+="- **Frontend:** $FRONT_TAG"$'\n'
+          [[ -n "$BACK_TAG" ]]  && COMPONENT_INFO+="- **Backend:** $BACK_TAG"$'\n'
+          [[ -n "$FUNCS_TAG" ]] && COMPONENT_INFO+="- **Functions:** $FUNCS_TAG"$'\n'
+          [[ -n "$INFRA_TAG" ]] && COMPONENT_INFO+="- **Infra:** $INFRA_TAG"$'\n'
+
+          FINAL_NOTES="${NOTES}${COMPONENT_INFO}"
+
+          echo "Creating GitHub Release for $TAG..."
+          gh release create "$TAG" \
+            --title "Release $TAG" \
+            --notes "$FINAL_NOTES" \
+            --repo "$REPO"
