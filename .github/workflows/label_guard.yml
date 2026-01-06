@@ -21,18 +21,25 @@ jobs:
             const number = context.payload.pull_request.number;
             const action = context.payload.action;
             const changedLabel = context.payload.label ? context.payload.label.name : "";
-            const actor = context.actor;
+            
+            const senderObj = context.payload.sender;
+            const senderName = senderObj ? senderObj.login : context.actor;
+            const senderType = senderObj ? senderObj.type : "User"; // 'User' veya 'Bot'
 
             if (action === "labeled" && changedLabel === "approved") {
-              if (actor !== "github-actions[bot]") {
+              
+              if (senderType !== "Bot" && senderName !== "github-actions[bot]") {
+                
                 await github.rest.issues.removeLabel({
                   owner, repo, issue_number: number, name: "approved"
                 });
+
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: number,
-                  body: `⛔ **Security Alert:** The 'approved' label cannot be added manually by @${actor}.\n\nPlease use the \`/approve\` command.`
+                  body: `⛔ **Security Alert:** The 'approved' label cannot be added manually by @${senderName}.\n\nPlease use the \`/approve\` command.`
                 });
-                core.setFailed(`Manual approval attempt blocked for user: ${actor}`);
+                
+                core.setFailed(`Manual approval attempt blocked for user: ${senderName}`);
                 return; 
               }
             }
@@ -50,7 +57,7 @@ jobs:
 
                   await github.rest.issues.createComment({
                     owner, repo, issue_number: number,
-                    body: `🔄 **System Reset:** Labels were changed by @${actor}. Previous approvals have been invalidated to ensure safety.`
+                    body: `🔄 **System Reset:** Labels were changed by @${senderName}. Previous approvals have been invalidated to ensure safety.`
                   });
                   core.info("Approvals reset due to label change.");
                }
