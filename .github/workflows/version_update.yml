@@ -67,7 +67,6 @@ jobs:
     name: Compute next version per component
     runs-on: ubuntu-latest
     needs: prepare_meta
-    if: needs.prepare_meta.outputs.changed != ''
     outputs:
       frontend_next: ${{ steps.calc.outputs.frontend_next }}
       backend_next: ${{ steps.calc.outputs.backend_next }}
@@ -92,15 +91,25 @@ jobs:
           BUMP="${BUMP_LEVEL}"
           CHANGED="${CHANGED}"
 
-          bump_one() {
+          get_latest_tag() {
             local prefix="$1"
             local pattern="${prefix}-v*"
             local last
             last=$(git tag --list "$pattern" | sort -V | tail -n 1 || true)
-            local base="0.0.0"
-            [[ -n "$last" ]] && base="${last#${prefix}-v}"
+            if [[ -z "$last" ]]; then
+               echo "${prefix}-v0.0.0"
+            else
+               echo "$last"
+            fi
+          }
+
+          bump_version() {
+            local prefix="$1"
+            local current_tag="$2"
             
+            local base="${current_tag#${prefix}-v}"
             IFS='.' read -r major minor patch <<< "$base"
+            
             case "$BUMP" in
               major) major=$((major + 1)); minor=0; patch=0 ;;
               minor) minor=$((minor + 1)); patch=0 ;;
@@ -119,41 +128,49 @@ jobs:
             echo "${prefix}-v${major}.${minor}.${patch}"
           }
 
-          bump_global() {
-            local last
-            last=$(git tag --list "v[0-9]*" | sort -V | tail -n 1 || true)
-            local base="0.0.0"
-            [[ -n "$last" ]] && base="${last#v}"
+          GLOBAL_LAST=$(git tag --list "v[0-9]*" | sort -V | tail -n 1 || echo "v0.0.0")
+          GLOBAL_BASE="${GLOBAL_LAST#v}"
+          IFS='.' read -r g_major g_minor g_patch <<< "$GLOBAL_BASE"
+          
+          case "$BUMP" in
+              major) g_major=$((g_major + 1)); g_minor=0; g_patch=0 ;;
+              minor) g_minor=$((g_minor + 1)); g_patch=0 ;;
+              patch|*) g_patch=$((g_patch + 1)) ;;
+          esac
+          
+          if [[ "$g_patch" -ge 10 ]]; then g_patch=0; g_minor=$((g_minor + 1)); fi
+          if [[ "$g_minor" -ge 10 ]]; then g_minor=0; g_major=$((g_major + 1)); fi
+          
+          GLOBAL_NEXT="v${g_major}.${g_minor}.${g_patch}"
 
-            IFS='.' read -r major minor patch <<< "$base"
-            case "$BUMP" in
-              major) major=$((major + 1)); minor=0; patch=0 ;;
-              minor) minor=$((minor + 1)); patch=0 ;;
-              patch|*) patch=$((patch + 1)) ;;
-            esac
+          
+          FRONT_CURRENT=$(get_latest_tag "frontend")
+          if [[ ",$CHANGED," == *",fend,"* ]]; then
+             FRONT_NEXT=$(bump_version "frontend" "$FRONT_CURRENT")
+          else
+             FRONT_NEXT="$FRONT_CURRENT"
+          fi
 
-            if [[ "$patch" -ge 10 ]]; then
-              patch=0
-              minor=$((minor + 1))
-            fi
-            if [[ "$minor" -ge 10 ]]; then
-              minor=0
-              major=$((major + 1))
-            fi
+          BACK_CURRENT=$(get_latest_tag "backend")
+          if [[ ",$CHANGED," == *",bend,"* ]]; then
+             BACK_NEXT=$(bump_version "backend" "$BACK_CURRENT")
+          else
+             BACK_NEXT="$BACK_CURRENT"
+          fi
 
-            echo "v${major}.${minor}.${patch}"
-          }
+          FUNCS_CURRENT=$(get_latest_tag "functions")
+          if [[ ",$CHANGED," == *",func,"* ]]; then
+             FUNCS_NEXT=$(bump_version "functions" "$FUNCS_CURRENT")
+          else
+             FUNCS_NEXT="$FUNCS_CURRENT"
+          fi
 
-          GLOBAL_NEXT="$(bump_global)"
-          FRONT_NEXT=""
-          BACK_NEXT=""
-          FUNCS_NEXT=""
-          INFRA_NEXT=""
-
-          [[ ",$CHANGED," == *",fend,"* ]] && FRONT_NEXT="$(bump_one "frontend")"
-          [[ ",$CHANGED," == *",bend,"* ]] && BACK_NEXT="$(bump_one "backend")"
-          [[ ",$CHANGED," == *",func,"* ]] && FUNCS_NEXT="$(bump_one "functions")"
-          [[ ",$CHANGED," == *",infra,"* ]] && INFRA_NEXT="$(bump_one "infra")"
+          INFRA_CURRENT=$(get_latest_tag "infra")
+          if [[ ",$CHANGED," == *",infra,"* ]]; then
+             INFRA_NEXT=$(bump_version "infra" "$INFRA_CURRENT")
+          else
+             INFRA_NEXT="$INFRA_CURRENT"
+          fi
 
           echo "frontend_next=$FRONT_NEXT"  >> "$GITHUB_OUTPUT"
           echo "backend_next=$BACK_NEXT"    >> "$GITHUB_OUTPUT"
@@ -165,7 +182,6 @@ jobs:
     name: Create and push tags
     runs-on: ubuntu-latest
     needs: compute_versions
-    if: needs.compute_versions.outputs.global_next != ''
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -177,17 +193,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          
+          ensure_tag() {
+            local tag="$1"
+            local msg="$2"
+            if [[ -z "$tag" ]]; then return; fi
+            
+            if git rev-parse "$tag" >/dev/null 2>&1; then
+              echo "Tag $tag already exists. Skipping creation."
+            else
+              echo "Creating new tag: $tag"
+              git tag -a "$tag" -m "$msg"
+            fi
+          }
+
           F_TAG="${{ needs.compute_versions.outputs.frontend_next }}"
           B_TAG="${{ needs.compute_versions.outputs.backend_next }}"
           FN_TAG="${{ needs.compute_versions.outputs.functions_next }}"
           INF_TAG="${{ needs.compute_versions.outputs.infra_next }}"
           G_TAG="${{ needs.compute_versions.outputs.global_next }}"
 
-          [[ -n "$G_TAG" ]] && git tag -a "$G_TAG" -m "Global release"
-          [[ -n "$F_TAG" ]] && git tag -a "$F_TAG" -m "Frontend release"
-          [[ -n "$B_TAG" ]] && git tag -a "$B_TAG" -m "Backend release"
-          [[ -n "$FN_TAG" ]] && git tag -a "$FN_TAG" -m "Functions release"
-          [[ -n "$INF_TAG" ]] && git tag -a "$INF_TAG" -m "Infra release"
+          ensure_tag "$G_TAG" "Global release"
+          ensure_tag "$F_TAG" "Frontend release"
+          ensure_tag "$B_TAG" "Backend release"
+          ensure_tag "$FN_TAG" "Functions release"
+          ensure_tag "$INF_TAG" "Infra release"
 
           git push --tags
 
@@ -231,7 +261,6 @@ jobs:
 
           git fetch --tags --force
           
-          # Find previous global tag
           PREV_TAG=""
           RELEASE_TAGS=$(gh release list --limit 100 --json tagName --jq ".[].tagName" | grep "^v[0-9]" || true)
           
@@ -253,7 +282,7 @@ jobs:
             DIFF_OUTPUT="INITIAL GLOBAL RELEASE. Full Commit History:\n$HISTORY"
           fi
 
-          PROMPT="You are a technical writer. Generate a release note for a major GLOBAL release of the repository.
+          PROMPT="You are a technical writer. Generate a release note for a major GLOBAL release.
           
           Context:
           - Release Version: $TAG
@@ -261,21 +290,21 @@ jobs:
           - PR Title: $PR_TITLE
           - PR Body: $PR_BODY
           
-          Data for Summary (Global Diff OR Commit History):
+          Data for Summary (Diff/History):
           $DIFF_OUTPUT
           
           Instructions:
           Generate the release notes using EXACTLY the following format:
           
-          Summary: Brief explanation of this release (mention if it is the first release).
+          Summary: Brief explanation of this release.
           
           ⚠️ Breaking Changes:
-          - Detail the major breaking changes here based on the diff/PR.
+          - Detail major breaking changes.
           
           Changes:
-          - List key features/fixes based on the provided data.
+          - List key features/fixes.
           
-          Do not include raw diffs or commit hashes. Ensure the tone is professional."
+          Do not include raw diffs or commit hashes. Professional tone."
 
           PAYLOAD=$(jq -n \
             --arg model "gpt-4o-mini" \
@@ -302,12 +331,13 @@ jobs:
             NOTES=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
           fi
 
+          
           COMPONENT_INFO=""
-          COMPONENT_INFO+=$'\n\n### 📦 Component Versions\n'
-          [[ -n "$FRONT_TAG" ]] && COMPONENT_INFO+="- **Frontend:** $FRONT_TAG"$'\n'
-          [[ -n "$BACK_TAG" ]]  && COMPONENT_INFO+="- **Backend:** $BACK_TAG"$'\n'
-          [[ -n "$FUNCS_TAG" ]] && COMPONENT_INFO+="- **Functions:** $FUNCS_TAG"$'\n'
-          [[ -n "$INFRA_TAG" ]] && COMPONENT_INFO+="- **Infra:** $INFRA_TAG"$'\n'
+          COMPONENT_INFO+=$'\n\n📦 Component Versions\n'
+          COMPONENT_INFO+="$FRONT_TAG"$'\n'
+          COMPONENT_INFO+="$BACK_TAG"$'\n'
+          COMPONENT_INFO+="$FUNCS_TAG"$'\n'
+          COMPONENT_INFO+="$INFRA_TAG"$'\n'
 
           FINAL_NOTES="${NOTES}${COMPONENT_INFO}"
 
