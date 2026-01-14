@@ -64,16 +64,17 @@ jobs:
               .data.map(l => l.name);
 
             if (currentApprovers.size >= REQUIRED) {
-              if (!labelsNow.includes("approved")) {
-                 await github.rest.issues.addLabels({
-                   owner, repo, issue_number: number, labels: ["approved"]
-                 });
-              }
               
               await github.rest.issues.createComment({
                 owner, repo, issue_number: number,
                 body: `✅ **Approved!** Total approvals: ${currentApprovers.size}/${REQUIRED}. (${[...currentApprovers].map(a => "@" + a).join(", ")})`
               });
+
+              if (!labelsNow.includes("approved")) {
+                 await github.rest.issues.addLabels({
+                   owner, repo, issue_number: number, labels: ["approved"]
+                 });
+              }
 
               const pr = await github.rest.pulls.get({ owner, repo, pull_number: number });
               const headSha = pr.data.head.sha;
