@@ -24,11 +24,25 @@ jobs:
             
             const senderObj = context.payload.sender;
             const senderName = senderObj ? senderObj.login : context.actor;
-            const senderType = senderObj ? senderObj.type : "User"; // 'User' veya 'Bot'
+            const senderType = senderObj ? senderObj.type : "User"; 
 
             if (action === "labeled" && changedLabel === "approved") {
               
               if (senderType !== "Bot" && senderName !== "github-actions[bot]") {
+                
+                const comments = await github.rest.issues.listComments({
+                  owner, repo, issue_number: number, per_page: 5, sort: "created", direction: "desc"
+                });
+
+                if (comments.data.length > 0) {
+                  const lastComment = comments.data[0];
+                  if (lastComment.user.type === "Bot" && 
+                      lastComment.body.includes("Approved! Total approvals:")) {
+                    
+                    core.info(`✅ Label added by ${senderName} but validated via Bot comment. Allowed.`);
+                    return;
+                  }
+                }
                 
                 await github.rest.issues.removeLabel({
                   owner, repo, issue_number: number, name: "approved"
