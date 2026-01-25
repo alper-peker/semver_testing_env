@@ -23,26 +23,24 @@ jobs:
             const changedLabel = context.payload.label ? context.payload.label.name : "";
             
             const senderObj = context.payload.sender;
-            const senderName = senderObj ? senderObj.login : context.actor;
-            const senderType = senderObj ? senderObj.type : "User"; 
+            const senderName = senderObj ? senderObj.login : "unknown";
+            const senderType = senderObj ? senderObj.type : "unknown";
+            const actor = context.actor;
+
+            console.log("--- DEBUG INFO ---");
+            console.log(`Action: ${action}`);
+            console.log(`Label: ${changedLabel}`);
+            console.log(`Sender Login: ${senderName}`);
+            console.log(`Sender Type: ${senderType}`);
+            console.log(`Actor: ${actor}`);
+            console.log("------------------");
 
             if (action === "labeled" && changedLabel === "approved") {
               
-              if (senderType !== "Bot" && senderName !== "github-actions[bot]") {
-                
-                const comments = await github.rest.issues.listComments({
-                  owner, repo, issue_number: number, per_page: 5, sort: "created", direction: "desc"
-                });
+              const isBot = senderType === "Bot" || senderName === "github-actions[bot]" || senderName.endsWith("[bot]");
 
-                if (comments.data.length > 0) {
-                  const lastComment = comments.data[0];
-                  if (lastComment.user.type === "Bot" && 
-                      lastComment.body.includes("Approved! Total approvals:")) {
-                    
-                    core.info(`✅ Label added by ${senderName} but validated via Bot comment. Allowed.`);
-                    return;
-                  }
-                }
+              if (!isBot) {
+                console.log(`Blocking manual approval by: ${senderName}`);
                 
                 await github.rest.issues.removeLabel({
                   owner, repo, issue_number: number, name: "approved"
@@ -50,11 +48,13 @@ jobs:
 
                 await github.rest.issues.createComment({
                   owner, repo, issue_number: number,
-                  body: `⛔ **Security Alert:** The 'approved' label cannot be added manually by @${senderName}.\n\nPlease use the \`/approve\` command.`
+                  body: `⛔ **Security Alert:** The 'approved' label cannot be added manually by @${senderName}.\n\nDebug Info: User identified as Type '${senderType}'. Please use the \`/approve\` command.`
                 });
                 
                 core.setFailed(`Manual approval attempt blocked for user: ${senderName}`);
                 return; 
+              } else {
+                 console.log(`Approval allowed for bot: ${senderName}`);
               }
             }
 
