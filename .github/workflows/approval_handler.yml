@@ -29,8 +29,6 @@ jobs:
             const user   = context.payload.comment.user.login;
             const body   = context.payload.comment.body.trim();
 
-            console.log(`Processing approval from user: ${user}`);
-
             if (!body.startsWith('/approve')) return;
 
             const APPROVERS_LIST = process.env.APPROVAL_USERS.split(",").map(s => s.trim());
@@ -39,7 +37,7 @@ jobs:
             if (!APPROVERS_LIST.includes(user)) {
               await github.rest.issues.createComment({
                 owner, repo, issue_number: number,
-                body: `⛔ @${user} is not authorized to approve. Allowed approvers: ${APPROVERS_LIST.join(", ")}`
+                body: `⛔ @${user} is not authorized to approve.`
               });
               return;
             }
@@ -50,7 +48,9 @@ jobs:
             for (const c of comments.data) {
               const cBody = (c.body || "").trim();
               
-              if (cBody.includes("System Reset:") || cBody.includes("Previous approvals have been invalidated")) {
+              if (cBody.includes("System Reset:") || 
+                  cBody.includes("Previous approvals have been invalidated") || 
+                  cBody.includes("Security Alert:")) {
                 currentApprovers.clear();
                 continue;
               }
@@ -61,14 +61,11 @@ jobs:
             }
 
             currentApprovers.add(user);
-            console.log(`Current Approvers: ${Array.from(currentApprovers).join(", ")}`);
 
-            const labelsNow = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number }))
-              .data.map(l => l.name);
+            const labelsNow = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number })).data.map(l => l.name);
 
             if (currentApprovers.size >= REQUIRED) {
               if (!labelsNow.includes("approved")) {
-                 console.log("Threshold reached. Adding 'approved' label...");
                  await github.rest.issues.addLabels({
                    owner, repo, issue_number: number, labels: ["approved"]
                  });
@@ -87,13 +84,7 @@ jobs:
               });
 
               if (runs.workflow_runs.length > 0) {
-                const run_id = runs.workflow_runs[0].id;
-                console.log(`Re-running failed check with ID: ${run_id}`);
-                await github.rest.actions.reRunWorkflowFailedJobs({ owner, repo, run_id: run_id });
-                await github.rest.issues.createComment({
-                    owner, repo, issue_number: number,
-                    body: `🔄 Re-running the failed 'label-check' job now that approval is received.`
-                });
+                await github.rest.actions.reRunWorkflowFailedJobs({ owner, repo, run_id: runs.workflow_runs[0].id });
               }
 
             } else {
