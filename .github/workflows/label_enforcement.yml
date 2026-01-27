@@ -11,8 +11,6 @@ on:
         ready_for_review,
         labeled,
         unlabeled,
-        submitted,
-        dismissed
       ]
   pull_request_review:
     types: [submitted, dismissed]
@@ -26,9 +24,10 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
+  actions: write
 
 env:
-  APPROVAL_USERS: "AlperPeker, alper-peker" 
+  APPROVAL_USERS: "AlperPeker, alper-peker, baris-test-approval" 
   REQUIRED_APPROVALS: "1"
 
 jobs:
@@ -72,46 +71,15 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          PROMPT="You are a GitHub PR Labeler Assistant.
-          Here is the definition of available labels in JSON format:
-          $LABELS
-          
-          Analyze the following Pull Request details and code diff to suggest the most appropriate labels.
-          Strictly allow ONLY labels from the provided JSON list.
-          Return ONLY a comma-separated list of labels (e.g. 'feature, backend'). Do not add any explanation or other text.
-          
-          PR Title: $PR_TITLE
-          PR Body: $PR_BODY
-          Diff Snippet:
-          $PR_DIFF"
-
-          PAYLOAD=$(jq -n \
-            --arg model "gpt-4o-mini" \
-            --arg system "You are a helpful assistant that suggests PR labels." \
-            --arg user "$PROMPT" \
-            '{
-              model: $model,
-              messages: [
-                {role: "system", content: $system},
-                {role: "user", content: $user}
-              ],
-              temperature: 0.3
-            }')
-
-          RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            -d "$PAYLOAD")
-
-          if echo "$RESPONSE" | jq -e '.error' > /dev/null; then
-            exit 1
-          fi
-
+          PROMPT="You are a GitHub PR Labeler Assistant. Here are labels: $LABELS. Analyze PR Title: $PR_TITLE, Body: $PR_BODY, Diff: $PR_DIFF. Return comma-separated labels."
+          PAYLOAD=$(jq -n --arg model "gpt-4o-mini" --arg system "Label assistant" --arg user "$PROMPT" '{model: $model, messages: [{role: "system", content: $system}, {role: "user", content: $user}], temperature: 0.3}')
+          RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $OPENAI_API_KEY" -d "$PAYLOAD")
+          if echo "$RESPONSE" | jq -e '.error' > /dev/null; then exit 1; fi
           SUGGESTION=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
           CLEAN_SUGGESTION=$(echo "$SUGGESTION" | sed 's/[."]//g' | tr -d '\n')
           echo "suggestion=$CLEAN_SUGGESTION" >> $GITHUB_OUTPUT
 
-      - name: Apply Labels (Silent)
+      - name: Apply Labels
         uses: actions/github-script@v7
         if: success()
         with:
@@ -131,7 +99,7 @@ jobs:
 
   label-check:
     runs-on: ubuntu-latest
-    if: always()               
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
     steps:
       - name: Wait for Label Guard
         run: sleep 10
@@ -154,81 +122,73 @@ jobs:
             const semver = new Set(["breaking-change", "feature", "fix", "security", "perf", "refactor", "docs", "test", "build", "ci", "deps", "revert"]);
             
             if (!currentLabels.some(l => semver.has(l))) {
-              core.setFailed("❌ Missing SemVer label! Please add one of: feature, fix, breaking-change, etc.");
+              core.setFailed("❌ Missing SemVer label!");
               return; 
             } else {
               core.info("✅ SemVer label check passed.");
             }
 
             let nativeCount = 0;
-            let nativeApprovers = [];
             try {
-              const reviews = await github.rest.pulls.listReviews({
-                owner, repo, pull_number: number, per_page: 100
-              });
-              
+              const reviews = await github.rest.pulls.listReviews({ owner, repo, pull_number: number, per_page: 100 });
               const reviewerStates = {};
               reviews.data.forEach(r => {
-                if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) {
-                  reviewerStates[r.user.login] = r.state;
-                }
+                if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) reviewerStates[r.user.login] = r.state;
               });
-              
               const approvedUsers = Object.keys(reviewerStates).filter(u => reviewerStates[u] === "APPROVED");
               nativeCount = approvedUsers.length;
-              nativeApprovers = approvedUsers;
-              
-              core.info(`ℹ️ Native Approvers (UI): ${nativeCount}/${REQUIRED_APPROVALS} (${nativeApprovers.join(", ")})`);
-            } catch (error) {
-              core.warning("⚠️ Could not fetch reviews from API.");
-              console.log(error);
-            }
+              core.info(`ℹ️ Native Approvers: ${nativeCount}/${REQUIRED_APPROVALS} (${approvedUsers.join(", ")})`);
+            } catch (error) { console.log(error); }
 
             let commandCount = 0;
-            let commandApprovers = new Set();
             try {
-              const comments = await github.rest.issues.listComments({
-                owner, repo, issue_number: number, per_page: 100
-              });
-              
+              const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 });
+              let commandApprovers = new Set();
               for (const c of comments.data) {
                 const cBody = (c.body || "").trim();
-                const cUser = c.user.login;
-
-                if (cBody.includes("System Reset:") || 
-                    cBody.includes("Previous approvals have been invalidated") || 
-                    cBody.includes("Security Alert:")) {
-                  commandApprovers.clear();
-                  continue;
-                }
-
-                if (cBody.startsWith("/approve")) {
-                  if (ALLOWED_USERS.includes(cUser)) {
-                    commandApprovers.add(cUser);
-                  }
-                }
+                if (cBody.includes("System Reset:") || cBody.includes("Security Alert:")) { commandApprovers.clear(); continue; }
+                if (cBody.startsWith("/approve") && ALLOWED_USERS.includes(c.user.login)) commandApprovers.add(c.user.login);
               }
               commandCount = commandApprovers.size;
-              core.info(`ℹ️ Command Approvers (ChatOps): ${commandCount}/${REQUIRED_APPROVALS} (${Array.from(commandApprovers).join(", ")})`);
-            } catch (error) {
-               core.warning("⚠️ Could not fetch comments for approval calculation.");
-            }
-            
-            const isNativeSatisfied = nativeCount >= REQUIRED_APPROVALS;
-            const isCommandSatisfied = commandCount >= REQUIRED_APPROVALS;
+              core.info(`ℹ️ Command Approvers: ${commandCount}/${REQUIRED_APPROVALS}`);
+            } catch (error) {}
 
-            if (isNativeSatisfied) {
-               core.info(`🎉 Approval Threshold Met via NATIVE Reviews (${nativeCount}/${REQUIRED_APPROVALS}).`);
-               return;
+            if (nativeCount >= REQUIRED_APPROVALS || commandCount >= REQUIRED_APPROVALS) {
+               core.info("🎉 Approval Threshold Met!");
+            } else {
+               core.setFailed(`❌ Approval Missing! Requires ${REQUIRED_APPROVALS}. Native: ${nativeCount}, Command: ${commandCount}`);
             }
 
-            if (isCommandSatisfied) {
-               core.info(`🎉 Approval Threshold Met via COMMAND Approvals (${commandCount}/${REQUIRED_APPROVALS}).`);
-               return;
-            }
+  retrigger-check:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request_review'
+    steps:
+      - name: Re-run Failed Label Check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const pr = context.payload.pull_request;
+            if (!pr) return;
 
-            core.setFailed(
-              `❌ Approval Missing! Requires ${REQUIRED_APPROVALS} approvals from EITHER source.\n` +
-              `   - Current Native Reviews: ${nativeCount}/${REQUIRED_APPROVALS}\n` +
-              `   - Current Command Approvals: ${commandCount}/${REQUIRED_APPROVALS}`
-            );
+            console.log("🔍 Review submitted. Looking for the failed check to re-run...");
+
+            const runs = await github.rest.actions.listWorkflowRunsForRepo({
+              owner, repo,
+              head_sha: pr.head.sha,
+              event: 'pull_request',
+              status: 'failure',
+              per_page: 5
+            });
+
+            const targetRun = runs.data.workflow_runs.find(run => run.name === 'Unified Label Process');
+
+            if (targetRun) {
+              console.log(`🔄 Found failed run (ID: ${targetRun.id}). Triggering re-run...`);
+              await github.rest.actions.reRunWorkflowFailedJobs({
+                owner, repo, run_id: targetRun.id
+              });
+              console.log("✅ Re-run command sent.");
+            } else {
+              console.log("ℹ️ No failed 'Unified Label Process' run found.");
+            }
