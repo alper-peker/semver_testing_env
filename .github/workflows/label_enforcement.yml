@@ -28,8 +28,8 @@ permissions:
   issues: write
 
 env:
-  APPROVAL_USERS: "AlperPeker, alper-peker, baris-test-approval" 
-  REQUIRED_APPROVALS: "2"
+  APPROVAL_USERS: "AlperPeker, alper-peker" 
+  REQUIRED_APPROVALS: "1"
 
 jobs:
   ai_label_suggestion:
