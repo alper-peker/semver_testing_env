@@ -12,8 +12,6 @@ on:
         labeled,
         unlabeled,
       ]
-  pull_request_review:
-    types: [submitted, dismissed]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -24,11 +22,6 @@ permissions:
   contents: read
   pull-requests: write
   issues: write
-  actions: write
-
-env:
-  APPROVAL_USERS: "AlperPeker, alper-peker, baris-test-approval" 
-  REQUIRED_APPROVALS: "1"
 
 jobs:
   ai_label_suggestion:
@@ -71,15 +64,46 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          PROMPT="You are a GitHub PR Labeler Assistant. Here are labels: $LABELS. Analyze PR Title: $PR_TITLE, Body: $PR_BODY, Diff: $PR_DIFF. Return comma-separated labels."
-          PAYLOAD=$(jq -n --arg model "gpt-4o-mini" --arg system "Label assistant" --arg user "$PROMPT" '{model: $model, messages: [{role: "system", content: $system}, {role: "user", content: $user}], temperature: 0.3}')
-          RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions -H "Content-Type: application/json" -H "Authorization: Bearer $OPENAI_API_KEY" -d "$PAYLOAD")
-          if echo "$RESPONSE" | jq -e '.error' > /dev/null; then exit 1; fi
+          PROMPT="You are a GitHub PR Labeler Assistant.
+          Here is the definition of available labels in JSON format:
+          $LABELS
+          
+          Analyze the following Pull Request details and code diff to suggest the most appropriate labels.
+          Strictly allow ONLY labels from the provided JSON list.
+          Return ONLY a comma-separated list of labels (e.g. 'feature, backend'). Do not add any explanation or other text.
+          
+          PR Title: $PR_TITLE
+          PR Body: $PR_BODY
+          Diff Snippet:
+          $PR_DIFF"
+
+          PAYLOAD=$(jq -n \
+            --arg model "gpt-4o-mini" \
+            --arg system "You are a helpful assistant that suggests PR labels." \
+            --arg user "$PROMPT" \
+            '{
+              model: $model,
+              messages: [
+                {role: "system", content: $system},
+                {role: "user", content: $user}
+              ],
+              temperature: 0.3
+            }')
+
+          RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $OPENAI_API_KEY" \
+            -d "$PAYLOAD")
+
+          if echo "$RESPONSE" | jq -e '.error' > /dev/null; then
+            exit 1
+          fi
+
           SUGGESTION=$(echo "$RESPONSE" | jq -r '.choices[0].message.content')
           CLEAN_SUGGESTION=$(echo "$SUGGESTION" | sed 's/[."]//g' | tr -d '\n')
           echo "suggestion=$CLEAN_SUGGESTION" >> $GITHUB_OUTPUT
 
-      - name: Apply Labels
+      - name: Apply Labels (Silent)
         uses: actions/github-script@v7
         if: success()
         with:
@@ -99,96 +123,53 @@ jobs:
 
   label-check:
     runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+    needs: ai_label_suggestion 
+    if: always()               
     steps:
       - name: Wait for Label Guard
         run: sleep 10
 
-      - name: Verify Mandatory Labels & Separate Approval Counts
+      - name: Verify Mandatory Labels & Author
         uses: actions/github-script@v7
         with:
           script: |
-            const REQUIRED_APPROVALS = parseInt(process.env.REQUIRED_APPROVALS || "2", 10);
-            const ALLOWED_USERS_RAW = process.env.APPROVAL_USERS || "";
-            const ALLOWED_USERS = ALLOWED_USERS_RAW.split(",").map(u => u.trim());
-            
             const { owner, repo } = context.repo;
-            const number = context.payload.pull_request ? context.payload.pull_request.number : (context.payload.issue ? context.payload.issue.number : Number(core.getInput('pr_number')));
-            
-            if (!number) { core.setFailed("PR number not found in context."); return; }
+            const number = context.eventName === "pull_request" ? context.payload.pull_request.number : Number(core.getInput('pr_number'));
+            if (!number) { core.setFailed("PR number not found."); return; }
 
-            const labelsData = await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number });
-            const currentLabels = labelsData.data.map(l => l.name);
+            const labels = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number })).data.map(l => l.name);
+
             const semver = new Set(["breaking-change", "feature", "fix", "security", "perf", "refactor", "docs", "test", "build", "ci", "deps", "revert"]);
-            
-            if (!currentLabels.some(l => semver.has(l))) {
-              core.setFailed("❌ Missing SemVer label!");
-              return; 
+            if (!labels.some(l => semver.has(l))) {
+              core.setFailed("❌ Missing SemVer label! Please add one of: feature, fix, breaking-change, etc.");
             } else {
               core.info("✅ SemVer label check passed.");
             }
 
-            let nativeCount = 0;
-            try {
-              const reviews = await github.rest.pulls.listReviews({ owner, repo, pull_number: number, per_page: 100 });
-              const reviewerStates = {};
-              reviews.data.forEach(r => {
-                if (["APPROVED", "CHANGES_REQUESTED", "DISMISSED"].includes(r.state)) reviewerStates[r.user.login] = r.state;
-              });
-              const approvedUsers = Object.keys(reviewerStates).filter(u => reviewerStates[u] === "APPROVED");
-              nativeCount = approvedUsers.length;
-              core.info(`ℹ️ Native Approvers: ${nativeCount}/${REQUIRED_APPROVALS} (${approvedUsers.join(", ")})`);
-            } catch (error) { console.log(error); }
-
-            let commandCount = 0;
-            try {
-              const comments = await github.rest.issues.listComments({ owner, repo, issue_number: number, per_page: 100 });
-              let commandApprovers = new Set();
-              for (const c of comments.data) {
-                const cBody = (c.body || "").trim();
-                if (cBody.includes("System Reset:") || cBody.includes("Security Alert:")) { commandApprovers.clear(); continue; }
-                if (cBody.startsWith("/approve") && ALLOWED_USERS.includes(c.user.login)) commandApprovers.add(c.user.login);
-              }
-              commandCount = commandApprovers.size;
-              core.info(`ℹ️ Command Approvers: ${commandCount}/${REQUIRED_APPROVALS}`);
-            } catch (error) {}
-
-            if (nativeCount >= REQUIRED_APPROVALS || commandCount >= REQUIRED_APPROVALS) {
-               core.info("🎉 Approval Threshold Met!");
-            } else {
-               core.setFailed(`❌ Approval Missing! Requires ${REQUIRED_APPROVALS}. Native: ${nativeCount}, Command: ${commandCount}`);
+            if (!labels.includes("approved")) {
+              core.setFailed("❌ Missing 'approved' label! Use '/approve' command to verify this PR.");
+              return;
             }
 
-  retrigger-check:
-    runs-on: ubuntu-latest
-    if: github.event_name == 'pull_request_review'
-    steps:
-      - name: Re-run Failed Label Check
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { owner, repo } = context.repo;
-            const pr = context.payload.pull_request;
-            if (!pr) return;
-
-            console.log("🔍 Review submitted. Looking for the failed check to re-run...");
-
-            const runs = await github.rest.actions.listWorkflowRunsForRepo({
-              owner, repo,
-              head_sha: pr.head.sha,
-              event: 'pull_request',
-              status: 'failure',
-              per_page: 5
+            const events = await github.rest.issues.listEvents({
+              owner,
+              repo,
+              issue_number: number,
+              per_page: 100
             });
 
-            const targetRun = runs.data.workflow_runs.find(run => run.name === 'Unified Label Process');
+            const approvedEvents = events.data
+              .filter(e => e.event === 'labeled' && e.label && e.label.name === 'approved')
+              .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-            if (targetRun) {
-              console.log(`🔄 Found failed run (ID: ${targetRun.id}). Triggering re-run...`);
-              await github.rest.actions.reRunWorkflowFailedJobs({
-                owner, repo, run_id: targetRun.id
-              });
-              console.log("✅ Re-run command sent.");
-            } else {
-              console.log("ℹ️ No failed 'Unified Label Process' run found.");
+            if (approvedEvents.length > 0) {
+              const lastEvent = approvedEvents[0];
+              const actor = lastEvent.actor.login;
+              
+              if (actor !== 'github-actions[bot]') {
+                core.setFailed(`❌ Security Violation: The 'approved' label was added manually by @${actor}. Approvals must be done via /approve command.`);
+                return;
+              }
             }
+
+            core.info("✅ Approval check passed (Verified Bot Action).");
