@@ -23,42 +23,51 @@ jobs:
             const changedLabel = context.payload.label ? context.payload.label.name : "";
             
             const senderObj = context.payload.sender;
-            const senderName = senderObj ? senderObj.login : context.actor;
-            const senderType = senderObj ? senderObj.type : "User"; // 'User' veya 'Bot'
+            const senderName = senderObj ? senderObj.login : "unknown";
+            const senderType = senderObj ? senderObj.type : "unknown";
 
             if (action === "labeled" && changedLabel === "approved") {
               
-              if (senderType !== "Bot" && senderName !== "github-actions[bot]") {
-                
-                await github.rest.issues.removeLabel({
-                  owner, repo, issue_number: number, name: "approved"
-                });
+              const isBot = senderType === "Bot" || senderName === "github-actions[bot]" || senderName.endsWith("[bot]");
+              if (isBot) return;
 
-                await github.rest.issues.createComment({
-                  owner, repo, issue_number: number,
-                  body: `⛔ **Security Alert:** The 'approved' label cannot be added manually by @${senderName}.\n\nPlease use the \`/approve\` command.`
-                });
-                
-                core.setFailed(`Manual approval attempt blocked for user: ${senderName}`);
-                return; 
-              }
+              await new Promise(r => setTimeout(r, 10000));
+
+              const comments = await github.rest.issues.listComments({
+                owner, repo, issue_number: number, per_page: 20, sort: "created", direction: "desc"
+              });
+
+              const botConfirmation = comments.data.find(c => 
+                (c.user.type === 'Bot' || c.user.login === 'github-actions[bot]') && 
+                c.body.includes("✅ **Approved!**")
+              );
+
+              if (botConfirmation) return;
+
+              await github.rest.issues.removeLabel({
+                owner, repo, issue_number: number, name: "approved"
+              });
+
+              await github.rest.issues.createComment({
+                owner, repo, issue_number: number,
+                body: `⛔ **Security Alert:** The 'approved' label cannot be added manually via UI by @${senderName}.\n\nPlease use the \`/approve\` command.`
+              });
+              
+              core.setFailed(`Manual approval attempt blocked for user: ${senderName}`);
+              return;
             }
 
             if (changedLabel !== "approved") {
                const labels = await github.rest.issues.listLabelsOnIssue({
                   owner, repo, issue_number: number
                });
-               const labelNames = labels.data.map(l => l.name);
-
-               if (labelNames.includes("approved")) {
+               if (labels.data.map(l => l.name).includes("approved")) {
                   await github.rest.issues.removeLabel({
                     owner, repo, issue_number: number, name: "approved"
                   });
-
                   await github.rest.issues.createComment({
                     owner, repo, issue_number: number,
-                    body: `🔄 **System Reset:** Labels were changed by @${senderName}. Previous approvals have been invalidated to ensure safety.`
+                    body: `🔄 **System Reset:** Labels were changed by @${senderName}. Previous approvals have been invalidated.`
                   });
-                  core.info("Approvals reset due to label change.");
                }
             }

@@ -37,7 +37,7 @@ jobs:
             if (!APPROVERS_LIST.includes(user)) {
               await github.rest.issues.createComment({
                 owner, repo, issue_number: number,
-                body: `⛔ @${user} is not authorized to approve. Allowed approvers: ${APPROVERS_LIST.join(", ")}`
+                body: `⛔ @${user} is not authorized to approve.`
               });
               return;
             }
@@ -48,7 +48,9 @@ jobs:
             for (const c of comments.data) {
               const cBody = (c.body || "").trim();
               
-              if (cBody.includes("System Reset:") || cBody.includes("Previous approvals have been invalidated")) {
+              if (cBody.includes("System Reset:") || 
+                  cBody.includes("Previous approvals have been invalidated") || 
+                  cBody.includes("Security Alert:")) {
                 currentApprovers.clear();
                 continue;
               }
@@ -60,8 +62,7 @@ jobs:
 
             currentApprovers.add(user);
 
-            const labelsNow = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number }))
-              .data.map(l => l.name);
+            const labelsNow = (await github.rest.issues.listLabelsOnIssue({ owner, repo, issue_number: number })).data.map(l => l.name);
 
             if (currentApprovers.size >= REQUIRED) {
               if (!labelsNow.includes("approved")) {
@@ -83,12 +84,7 @@ jobs:
               });
 
               if (runs.workflow_runs.length > 0) {
-                const run_id = runs.workflow_runs[0].id;
-                await github.rest.actions.reRunWorkflowFailedJobs({ owner, repo, run_id: run_id });
-                await github.rest.issues.createComment({
-                    owner, repo, issue_number: number,
-                    body: `🔄 Re-running the failed 'label-check' job now that approval is received.`
-                });
+                await github.rest.actions.reRunWorkflowFailedJobs({ owner, repo, run_id: runs.workflow_runs[0].id });
               }
 
             } else {
